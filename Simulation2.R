@@ -1,5 +1,6 @@
 library(KernSmooth)
 library(MASS)
+library(Matrix)
 library(DNAcopy)
 library(tilingArray)
 library(cumSeg)
@@ -133,43 +134,69 @@ screening<-function(x, y, h){       #local linear smoothing (rightlimit-leftlimi
   n=length(x)
   xx=1:(n+2*h)
   yy=c(rep(y[1],h),y,rep(y[n],h))       #create data outside the boundaries
-  right=rep(0,n+h)     #rightlimit for xx[1:(n+h)]
-  for (i in 1:(n+h)){
-    right[i]=locpoly(xx[i:(n+2*h)],yy[i:(n+2*h)],kernel="epanech",bandwidth=h,gridsize=length(xx[i:(n+2*h)]))$y[1]
+  right=rep(0,n)     #rightlimit for xx[1:n]
+  left=rep(0,n)       #leftlimit for xx[(1+2*h):(n+2*h)]
+  for (i in 1:n){
+    model=locpoly(xx[i:(i+2*h)],yy[i:(i+2*h)],kernel="epanech",bandwidth=h,gridsize=1+2*h)
+    right[i]=model$y[1]
+    left[i]=model$y[1+2*h]
   }
-  left=rep(0,n+h)       #leftlimit for xx[(h+1):(n+2*h)]
-  for (i in 1:(n+h)){
-    left[i]=locpoly(xx[1:(h+i)],yy[1:(h+i)],kernel="epanech",bandwidth=h,gridsize=length(xx[1:(h+i)]))$y[length(xx[1:(h+i)])]
-  }
-  L=right[(h+1):(n+h)]-left[1:n]
+  L=c(rep(0,h),right[(2*h+1):n]-left[1:(n-2*h)],rep(0,h))
   return(L)
 }
 
-
-DWB<-function(x,l,B){    #dependent wild bootstrap 
+DWB<-function(x,l,B=500){    #dependent wild bootstrap 
   n=length(x)
-  V=matrix(0, nrow=n, ncol=n)
-  for(i in 1:n){
-    for(j in 1:n){
-      V[i,j]=(1-abs(i-j)/l)*(abs(i-j)<l)                   #Bartlett kernel
+  V=as(as(diag(0,n), "diagonalMatrix"), "CsparseMatrix")
+  for (i in 1:n){
+    for (j in 1:n){
+      if (abs(i-j)<l)
+        V[i,j]=(1-abs(i-j)/l)            #Bartlett kernel
     }
   }
-  W=mvrnorm(n=B,mu=rep(0,n),Sigma=V)
+  model=Cholesky(V, perm = TRUE, super = FALSE, Imult = 0)
+  L=as(model,"Matrix")
+  P=t(as(model, "pMatrix"))
   X=matrix(0,nrow=B,ncol=n)                 #show B bootstrap samples
   for(i in 1:B){
-    X[i,]=x*W[i,]
+    X[i,]=x*(P%*%(L%*%rnorm(n,mean=0,sd=1)))
   }
   return(X)
 }
 
+Pvalue<-function(x, y, h, candidate, B=500){
+  n=length(x)
+  jump=0 
+  for(k in 1:length(candidate)){
+    jump<-jump+L[(candidate[k])]*(x>candidate[k])
+  }
+  hh=dpill(x,(y-jump))                #bandwidth selection
+  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
+  residual=y-jump-yhat
+  r=residual-mean(residual)       #centered residual
+  rr=DWB(r,h,B)                 #bootstrap residual
+  T=matrix(0,nrow=B,ncol=length(candidate))              #bootstrap statistics 
+  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
+  for(j in 1:B){
+    yy=yhat+rr[j,]            #bootstrap y           
+    LL=abs(screening(x,yy,h))
+    for(k in 1:length(candidate)){
+      T[j,k]=max(LL[(segment[k]:segment[k+1])])
+    }
+  }
+  p=apply((T-matrix(rep(abs(L)[candidate],B),nrow=B,byrow=TRUE)>0),2,mean)
+  return(p)
+}
+
+
 #######################################Simulation2
 set.seed(18)
-n=500
+n=1000
 x=1:n
 h=10
-J=6
+J=14
 wave=0.1*(sin(2*pi*x/100)+2*sin(2*pi*x/60))
-tau=(1:J)*80-30
+tau=(1:J)*70-30
 ########Case 1: iid errors without wave
 N11=NULL            #estimated number of change points for method1 
 N12=NULL
@@ -227,27 +254,9 @@ for(j in 1:100){
   }
   FP14=c(FP14,fp)
   ##############################Proposed
-  jump=0 
   L=screening(x,y,h)
   candidate=localMax(abs(L),span=2*h)
-  for(k in 1:length(candidate)){
-    jump<-jump+L[(candidate[k])]*(x>candidate[k])
-  }
-  hh=dpill(x,(y-jump))                #bandwidth selection
-  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
-  residual=y-jump-yhat
-  r=residual-mean(residual)       #centered residual
-  rr=DWB(r,h,B=500)                 #bootstrap residual
-  T=matrix(0,nrow=500,ncol=length(candidate))              #bootstrap statistics B=500
-  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
-  for(i in 1:500){
-    yy=yhat+rr[i,]            #bootstrap y           
-    LL=abs(screening(x,yy,h))
-    for(k in 1:length(candidate)){
-      T[i,k]=max(LL[(segment[k]:segment[k+1])])
-    }
-  }
-  p=apply((T-matrix(rep(abs(L)[candidate],500),nrow=500,byrow=TRUE)>0),2,mean)
+  p=Pvalue(x,y,h,candidate)
   estimate=candidate[which(p.adjust(p,"BH")<0.05)]
   N15=c(N15,length(estimate))
   fp=0
@@ -315,27 +324,9 @@ for(j in 1:100){
   }
   FP24=c(FP24,fp)
   ##############################Proposed
-  jump=0 
   L=screening(x,y,h)
   candidate=localMax(abs(L),span=2*h)
-  for(k in 1:length(candidate)){
-    jump<-jump+L[(candidate[k])]*(x>candidate[k])
-  }
-  hh=dpill(x,(y-jump))                #bandwidth selection
-  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
-  residual=y-jump-yhat
-  r=residual-mean(residual)       #centered residual
-  rr=DWB(r,h,B=500)                 #bootstrap residual
-  T=matrix(0,nrow=500,ncol=length(candidate))              #bootstrap statistics B=500
-  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
-  for(i in 1:500){
-    yy=yhat+rr[i,]            #bootstrap y           
-    LL=abs(screening(x,yy,h))
-    for(k in 1:length(candidate)){
-      T[i,k]=max(LL[(segment[k]:segment[k+1])])
-    }
-  }
-  p=apply((T-matrix(rep(abs(L)[candidate],500),nrow=500,byrow=TRUE)>0),2,mean)
+  p=Pvalue(x,y,h,candidate)
   estimate=candidate[which(p.adjust(p,"BH")<0.05)]
   N25=c(N25,length(estimate))
   fp=0
@@ -403,27 +394,9 @@ for(j in 1:100){
   }
   FP34=c(FP34,fp)
   ##############################Proposed
-  jump=0 
   L=screening(x,y,h)
   candidate=localMax(abs(L),span=2*h)
-  for(k in 1:length(candidate)){
-    jump<-jump+L[(candidate[k])]*(x>candidate[k])
-  }
-  hh=dpill(x,(y-jump))                #bandwidth selection
-  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
-  residual=y-jump-yhat
-  r=residual-mean(residual)       #centered residual
-  rr=DWB(r,h,B=500)                 #bootstrap residual
-  T=matrix(0,nrow=500,ncol=length(candidate))              #bootstrap statistics B=500
-  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
-  for(i in 1:500){
-    yy=yhat+rr[i,]            #bootstrap y           
-    LL=abs(screening(x,yy,h))
-    for(k in 1:length(candidate)){
-      T[i,k]=max(LL[(segment[k]:segment[k+1])])
-    }
-  }
-  p=apply((T-matrix(rep(abs(L)[candidate],500),nrow=500,byrow=TRUE)>0),2,mean)
+  p=Pvalue(x,y,h,candidate)
   estimate=candidate[which(p.adjust(p,"BH")<0.05)]
   N35=c(N35,length(estimate))
   fp=0
@@ -491,27 +464,9 @@ for(j in 1:100){
   }
   FP44=c(FP44,fp)
   ##############################Proposed
-  jump=0 
   L=screening(x,y,h)
   candidate=localMax(abs(L),span=2*h)
-  for(k in 1:length(candidate)){
-    jump<-jump+L[(candidate[k])]*(x>candidate[k])
-  }
-  hh=dpill(x,(y-jump))                #bandwidth selection
-  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
-  residual=y-jump-yhat
-  r=residual-mean(residual)       #centered residual
-  rr=DWB(r,h,B=500)                 #bootstrap residual
-  T=matrix(0,nrow=500,ncol=length(candidate))              #bootstrap statistics B=500
-  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
-  for(i in 1:500){
-    yy=yhat+rr[i,]            #bootstrap y           
-    LL=abs(screening(x,yy,h))
-    for(k in 1:length(candidate)){
-      T[i,k]=max(LL[(segment[k]:segment[k+1])])
-    }
-  }
-  p=apply((T-matrix(rep(abs(L)[candidate],500),nrow=500,byrow=TRUE)>0),2,mean)
+  p=Pvalue(x,y,h,candidate)
   estimate=candidate[which(p.adjust(p,"BH")<0.05)]
   N45=c(N45,length(estimate))
   fp=0

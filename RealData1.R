@@ -1,6 +1,15 @@
 library(KernSmooth)
-library(Matrix)
 library(MASS)
+library(Matrix)
+library(DNAcopy)
+library(tilingArray)
+library(cumSeg)
+
+#This code needs to be executed on the Windows operating system
+
+##############################Real Data
+CGHdata <- read.csv("CGHdataset.csv", header=TRUE)
+set.seed(12)
 
 ###########################define some functions 
 #Estimate the standard deviation of the intensities
@@ -185,106 +194,153 @@ Pvalue<-function(x, y, h, candidate, B=500){
   return(p)
 }
 
-#######################################Simulation1
-set.seed(18)
-n=200
-x=1:n
-h=10
-signal=1*(x>=40)-1*(x>=160)
-wave=0.1*(sin(2*pi*x/100)+2*sin(2*pi*x/60))
-############Scenario I: iid errors, no wave
-estimate1=NULL       #SaRa algorithm
-Estimate1=NULL       #proposed algorithm
-n1=NULL        #number of change points by SaRa algorithm
-N1=NULL       #number of change points by proposed algorithm
-for(i in 1:200){
-  e=rnorm(n=200,mean=0,sd=0.2)
-  y=signal+e
-  model=SARA(y, h)           #SaRa algorithm
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate1=c(estimate1, estimate)  
-  n1=c(n1,length(estimate))
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate1=c(Estimate1, estimate) 
-  N1=c(N1,length(estimate))
-}
-############Scenario II: correlated errors, no wave
-estimate2=NULL
-Estimate2=NULL
-n2=NULL
-N2=NULL
-for(i in 1:200){
-  e=arima.sim(n=300, list(ar = 0.6), sd = 0.16)[101:300]
-  y=signal+e  
-  model=SARA(y, h)           
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate2=c(estimate2, estimate) 
-  n2=c(n2,length(estimate)) 
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate2=c(Estimate2, estimate) 
-  N2=c(N2,length(estimate)) 
-}
-############Scenario III: iid errors, with waves
-estimate3=NULL
-Estimate3=NULL
-n3=NULL
-N3=NULL
-for(i in 1:200){
-  e=rnorm(n=200,mean=0,sd=0.2)
-  y=signal+wave+e  
-  model=SARA(y, h)           
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate3=c(estimate3, estimate)
-  n3=c(n3,length(estimate))  
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate3=c(Estimate3, estimate) 
-  N3=c(N3,length(estimate)) 
-}
-############Scenario IV: correlated errors, with waves
-estimate4=NULL
-Estimate4=NULL
-n4=NULL
-N4=NULL
-for(i in 1:200){
-  e=arima.sim(n=300, list(ar = 0.6), sd = 0.16)[101:300]
-  y=signal+wave+e  
-  model=SARA(y, h)           
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate4=c(estimate4, estimate)  
-  n4=c(n4,length(estimate)) 
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate4=c(Estimate4, estimate) 
-  N4=c(N4,length(estimate)) 
-}
 
-#######################################show table
-rbind(c(sum(n1==0),sum(n1==1),sum(n1==2),sum(n1==3),sum(n1>3),mean(n1)),
-      c(sum(N1==0),sum(N1==1),sum(N1==2),sum(N1==3),sum(N1>3),mean(N1)),
-      c(sum(n2==0),sum(n2==1),sum(n2==2),sum(n2==3),sum(n2>3),mean(n2)),
-      c(sum(N2==0),sum(N2==1),sum(N2==2),sum(N2==3),sum(N2>3),mean(N2)),
-      c(sum(n3==0),sum(n3==1),sum(n3==2),sum(n3==3),sum(n3>3),mean(n3)),
-      c(sum(N3==0),sum(N3==1),sum(N3==2),sum(N3==3),sum(N3>3),mean(N3)),
-      c(sum(n4==0),sum(n4==1),sum(n4==2),sum(n4==3),sum(n4>3),mean(n4)),
-      c(sum(N4==0),sum(N4==1),sum(N4==2),sum(N4==3),sum(N4>3),mean(N4)))
-#######################################show figure
-par(mfrow=c(4,2))
-hist(estimate1,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario I)")
-hist(Estimate1,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario I)")
-hist(estimate2,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario II)")
-hist(Estimate2,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario II)")
-hist(estimate3,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario III)")
-hist(Estimate3,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario III)")
-hist(estimate4,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario IV)")
-hist(Estimate4,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario IV)")
+##############################sample X2821
+y=na.omit(CGHdata$X2821_log2ratio) 
+n=length(y)
+y=y[1:n]
+x=1:n
+n1=1:5       #estimated number of change points for methods 1-5
+#######CBS
+CBS=DNAcopy::segment(CNA(y, rep(1,n), 1:n))
+estimate=CBS$output[,4]
+estimate1=estimate[-length(CBS$output[,4])]
+n1[1]=length(estimate1)
+######DP
+model=tilingArray::segment(y, maxseg=60, maxk=n/2)
+estimate2=model@breakpoints[[which.max(logLik(model, penalty="BIC"))]][,"estimate"]
+n1[2]=length(estimate2)
+#######cumSeg
+estimate3=jumpoints(y,k=60,output="2")$psi
+n1[3]=length(estimate3)
+######SaRa
+h=10
+model=SARA(y,h)
+estimate4=model$index[which(p.adjust(model$pV, "BH")<0.1)]
+n1[4]=length(estimate4)
+#######Proposed
+L=screening(x,y,h)
+candidate=localMax(abs(L),span=2*h)
+p=Pvalue(x,y,h,candidate)
+estimate5=candidate[which(p.adjust(p,"BH")<0.1)]
+n1[5]=length(estimate5)
+
+##############################sample X1533.10
+y=na.omit(CGHdata$X1533.10_log2ratio) 
+n=length(y)
+y=y[1:n]
+x=1:n
+n2=1:5       #estimated number of change points for methods 1-5
+#######CBS
+CBS=DNAcopy::segment(CNA(y, rep(1,n), 1:n))
+estimate=CBS$output[,4]
+estimate1=estimate[-length(CBS$output[,4])]
+n2[1]=length(estimate1)
+######DP
+model=tilingArray::segment(y, maxseg=60, maxk=n/2)
+estimate2=model@breakpoints[[which.max(logLik(model, penalty="BIC"))]][,"estimate"]
+n2[2]=length(estimate2)
+#######cumSeg
+estimate3=jumpoints(y,k=60,output="2")$psi
+n2[3]=length(estimate3)
+######SaRa
+h=10
+model=SARA(y,h)
+estimate4=model$index[which(p.adjust(model$pV, "BH")<0.1)]
+n2[4]=length(estimate4)
+#######Proposed
+L=screening(x,y,h)
+candidate=localMax(abs(L),span=2*h)
+p=Pvalue(x,y,h,candidate)
+estimate5=candidate[which(p.adjust(p,"BH")<0.1)]
+n2[5]=length(estimate5)
+
+##############################sample X1211.2
+y=na.omit(CGHdata$X1211.2_log2ratio) 
+n=length(y)
+y=y[1:n]
+x=1:n
+n3=1:5       #estimated number of change points for methods 1-5
+#######CBS
+CBS=DNAcopy::segment(CNA(y, rep(1,n), 1:n))
+estimate=CBS$output[,4]
+estimate1=estimate[-length(CBS$output[,4])]
+n3[1]=length(estimate1)
+######DP
+model=tilingArray::segment(y, maxseg=60, maxk=n/2)
+estimate2=model@breakpoints[[which.max(logLik(model, penalty="BIC"))]][,"estimate"]
+n3[2]=length(estimate2)
+#######cumSeg
+estimate3=jumpoints(y,k=60,output="2")$psi
+n3[3]=length(estimate3)
+######SaRa
+h=10
+model=SARA(y,h)
+estimate4=model$index[which(p.adjust(model$pV, "BH")<0.1)]
+n3[4]=length(estimate4)
+#######Proposed
+L=screening(x,y,h)
+candidate=localMax(abs(L),span=2*h)
+p=Pvalue(x,y,h,candidate)
+estimate5=candidate[which(p.adjust(p,"BH")<0.1)]
+n3[5]=length(estimate5)
+
+##############show figure
+par(mfrow=c(2,3))
+estimate11=c(0,estimate1,n)
+fitted1=NULL
+for(i in 1:(length(estimate1)+1)){
+  m=mean(y[(estimate11[i]+1):estimate11[i+1]])
+  fitted1=c(fitted1,rep(m, estimate11[i+1]-estimate11[i]))
+}
+plot(y,xlab="locations",main="CBS",pch=20,col=8)
+lines(fitted1,col=2,lwd=2)
+estimate22=c(0,estimate2,n)
+fitted2=NULL
+for(i in 1:(length(estimate2)+1)){
+  m=mean(y[(estimate22[i]+1):estimate22[i+1]])
+  fitted2=c(fitted2,rep(m, estimate22[i+1]-estimate22[i]))
+}
+plot(y,xlab="locations",main="DP",pch=20,col=8)
+lines(fitted2,col=2,lwd=2)
+estimate33=c(0,estimate3,n)
+fitted3=NULL
+for(i in 1:(length(estimate3)+1)){
+  m=mean(y[(estimate33[i]+1):estimate33[i+1]])
+  fitted3=c(fitted3,rep(m, estimate33[i+1]-estimate33[i]))
+}
+plot(y,xlab="locations",main="cumSeg",pch=20,col=8)
+lines(fitted3,col=2,lwd=2)
+estimate44=c(0,estimate4,n)
+fitted4=NULL
+for(i in 1:(length(estimate4)+1)){
+  m=mean(y[(estimate44[i]+1):estimate44[i+1]])
+  fitted4=c(fitted4,rep(m, estimate44[i+1]-estimate44[i]))
+}
+plot(y,xlab="locations",main="SaRa",pch=20,col=8)
+lines(fitted4,col=2,lwd=2)
+jump=0 
+for(i in 1:length(estimate5)){
+  jump<-jump+L[estimate5[i]]*(x>estimate5[i])
+}
+hh=dpill(x,(y-jump))
+fitted5=locpoly(x,(y-jump), degree=0, bandwidth=hh, gridsize=n)$y+jump
+plot(y,xlab="locations",main="Proposed",pch=20,col=8)
+lines(fitted5,col=2,lwd=2)
+residual=y-fitted5
+pacf(residual,lag.max=20,main="PACF")
+
+plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,4),main="data",pch=16,col="black")
+plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="CBS",pch=16,col=8)
+lines(x[1301:1400],fitted1[1301:1400],col=2,lwd=2)
+plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="DP",pch=16,col=8)
+lines(x[1301:1400],fitted2[1301:1400],col=2,lwd=2)
+plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="cumSeg",pch=16,col=8)
+lines(x[1301:1400],fitted3[1301:1400],col=2,lwd=2)
+plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="SaRa",pch=16,col=8)
+lines(x[1301:1400],fitted4[1301:1400],col=2,lwd=2)
+plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="Proposed",pch=16,col=8)
+lines(x[1301:1400],fitted5[1301:1400],col=2,lwd=2)
+
+############show table
+rbind(n1,n2,n3)
