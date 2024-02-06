@@ -1,10 +1,11 @@
 library(KernSmooth)
-library(Matrix)
 library(MASS)
+library(Matrix)
+library(gam)
+library(mvtnorm)
 
 ###########################define some functions 
-#Estimate the standard deviation of the intensities
-estimateSigma<-function (Y, h = 10) {  
+estimateSigma<-function (Y, h = 10) {       #Estimate the standard deviation of the intensities
   n = length(Y)
   YBar = rep(0, n)
   for (i in 1:n) {
@@ -15,19 +16,7 @@ estimateSigma<-function (Y, h = 10) {
   return(sqrt(var(Y - YBar) * (2 * h + 1)/(2 * h)))
 }
 
-#Calculate the value for local diagnostic function
-localDiagnostic<-function (y, h) { 
-  yy = c(rep(0, h - 1), y, rep(0, h))
-  n = length(y)
-  z = rep(0, n)
-  for(i in 1:n){
-    z[i]=sum(yy[i:(h+i-1)])/h-sum(yy[(h+i):(2*h-1+i)])/h
-  }
-  return(z)
-}
-
-#Get the local maximizers of local diagnostic function
-localMax<-function (y, span = 5) {  
+localMax<-function (y, span = 5) {           #Get the local maximizers of local diagnostic function  
   if (length(y) < span * 2 + 1) 
     return(NULL)
   n = length(y)
@@ -39,252 +28,363 @@ localMax<-function (y, span = 5) {
   return(index)
 }
 
-clean<-function (LocalM, h) 
-{
-  len <- length(LocalM)
-  rm.list <- NULL
-  for (i in 1:(len - 1)) {
-    if (LocalM[i] >= LocalM[i + 1] - h) {
-      rm.list <- c(rm.list, i)
-    }
-  }
-  if (length(rm.list) > 0) {
-    LocalM <- LocalM[-as.vector(rm.list)]
-  }
-  return(LocalM = LocalM)
-}
-
-SARAp<-function (Y, h, hh = 2 * h, sigma = NULL) { 
-  n = length(Y)
-  LDF = localDiagnostic(Y, h)
-  LDF.pos = LDF
-  LDF.neg = -LDF
-  if (is.null(sigma)) 
-    sigma = estimateSigma(Y, h = max(3, 2 * floor(log(n))))
-  pV.pos = 1 - 2 * pnorm(LDF.pos/(sqrt(2/h) * sigma))
-  LocalMax = localMax(LDF.pos, span = hh)
-  LocalMax = clean(LocalMax, h)
-  LocalMaxValue = pV.pos[LocalMax]
-  pV.neg = 1 - 2 * pnorm(LDF.neg/(sqrt(2/h) * sigma))
-  LocalMin = localMax(LDF.neg, span = hh)
-  LocalMin = clean(LocalMin, h)
-  LocalMinValue = pV.neg[LocalMin]
-  LocalExt <- c(LocalMax, LocalMin)
-  LocalExtValue <- c(LocalMaxValue, LocalMinValue)
-  LocalExtValue <- LocalExtValue[order(LocalExt)]
-  LocalExt <- sort(LocalExt)
-  return(list(index = LocalExt, pV = LocalExtValue))
-}
-
-#Get the inverse cumulative distribution function of local min p-values
-fInverse<-function (n = 10000, h = 10, hh = 2 * h, precise = 10000, simT = 100) { 
-  empirical = NULL
-  for (i in 1:simT) {
-    Y = rnorm(n)
-    LDF = localDiagnostic(Y, h)
-    LDF.pos = LDF
-    LDF.neg = -LDF
-    sigma = 1
-    index.pos = localMax(y = LDF.pos, span = hh)
-    pV.pos = 1 - 2 * pnorm(LDF.pos[index.pos]/(sqrt(2/h) * 
-                                                 sigma))
-    index.neg = localMax(y = LDF.neg, span = hh)
-    pV.neg = 1 - 2 * pnorm(LDF.neg[index.neg]/(sqrt(2/h) * 
-                                                 sigma))
-    index <- c(index.pos, index.neg)
-    pv <- c(pV.pos, pV.neg)
-    pv <- pv[order(index)]
-    index <- sort(index)
-    len <- length(index)
-    rm.list <- NULL
-    for (j in 1:(len - 1)) {
-      if (index[j] >= index[j + 1] - h) {
-        rm.list <- c(rm.list, j)
-      }
-    }
-    if (length(rm.list) > 0) {
-      pv <- pv[-rm.list]
-    }
-    empirical <- c(empirical, pv)
-    if (length(empirical) > 10 * precise) 
-      break
-  }
-  return(quantile(empirical, probs = c(0:precise)/precise))
-}
-
-SARA<-function (Y, h = 10, hh = 2 * h, FINV = NULL, sigma = NULL, precise = 10000) {
-  object = SARAp(Y = Y, h = h, hh = hh, sigma = sigma)
-  index = object$index
-  pV = object$pV
-  if (is.null(FINV)) 
-    FINV = fInverse(n = length(Y), h = h, hh = hh, precise = precise, 
-                    simT = 100)
-  pVcorr = pV
-  for (i in 1:length(pV)) {
-    pVcorr[i] = (length(which(FINV < pV[i])))/(precise + 
-                                                 1)
-  }
-  return(list(index = index, pV = pVcorr))
-}
-
 screening<-function(x, y, h){       #local linear smoothing (rightlimit-leftlimit)
   n=length(x)
-  xx=1:(n+2*h)
-  yy=c(rep(y[1],h),y,rep(y[n],h))       #create data outside the boundaries
-  right=rep(0,n)     #rightlimit for xx[1:n]
-  left=rep(0,n)       #leftlimit for xx[(1+2*h):(n+2*h)]
-  for (i in 1:n){
-    model=locpoly(xx[i:(i+2*h)],yy[i:(i+2*h)],kernel="epanech",bandwidth=h,gridsize=1+2*h)
-    right[i]=model$y[1]
-    left[i]=model$y[1+2*h]
+  xx=c(2*x[1]-x[sort(which(x<(x[1]+h))[-1],decreasing=T)], x, 2*x[n]-x[sort(which(x>(x[n]-h)),decreasing=T)[-1]])
+  yy=c(2*y[1]-y[sort(which(x<(x[1]+h))[-1],decreasing=T)], y, 2*y[n]-y[sort(which(x>(x[n]-h)),decreasing=T)[-1]])       #create data outside the boundaries
+  rkernal<-function(t){
+    0.75*(1-((xx-t)/h)^2)*(((xx-t)/h)>0)*(((xx-t)/h)<=1)
   }
-  L=c(rep(0,h),right[(2*h+1):n]-left[1:(n-2*h)],rep(0,h))
-  return(L)
+  lkernal<-function(t){
+    0.75*(1-((xx-t)/h)^2)*(((xx-t)/h)>=-1)*(((xx-t)/h)<=0)
+  }
+  rweight<-function(t){
+    rkernal(t)*(sum(rkernal(t)*(xx-t)^2)-(xx-t)*sum(rkernal(t)*(xx-t)))
+  }
+  lweight<-function(t){
+    lkernal(t)*(sum(lkernal(t)*(xx-t)^2)-(xx-t)*sum(lkernal(t)*(xx-t)))
+  }
+  rlimit<-function(t){
+    sum(rweight(t)*yy)/sum(rweight(t))
+  }
+  llimit<-function(t){
+    sum(lweight(t)*yy)/sum(lweight(t))
+  }
+  right=rep(0,n)     #rightlimit for x[1:n]
+  left=rep(0,n)       #leftlimit for x[1:n]
+  for (i in 1:n){
+    right[i]=rlimit(x[i])
+    left[i]=llimit(x[i])
+  }
+  D=abs(right-left)
+  return(D)
 }
 
-DWB<-function(x,l,B=500){    #dependent wild bootstrap 
-  n=length(x)
-  V=as(as(diag(0,n), "diagonalMatrix"), "CsparseMatrix")
-  for (i in 1:n){
-    for (j in 1:n){
-      if (abs(i-j)<l)
-        V[i,j]=(1-abs(i-j)/l)            #Bartlett kernel
+refine1<-function(x,y,h,candidate){       #step 2 (proposed I)
+  for(k in 1:5){
+    Candidate=c(0,candidate,1)
+    a=sample(1:length(candidate))
+    for(j in 1:length(a)){
+      index=which((x<Candidate[(a[j]+2)])*(x>Candidate[a[j]])==1)        #subsequence
+      xsub=x[index]
+      ysub=y[index]
+      b=which((x<(candidate[a[j]]+h))*(x>(candidate[a[j]]-h))==1)          #neighborhood of candidate
+      RSS=rep(0, length(b))
+      for(i in 1:length(b)){
+        z=(xsub>x[b[i]])+1-1
+        model=gam(ysub~z+s(xsub,5))
+        RSS[i]=sum((model$residuals)^2)
+      }
+      candidate[a[j]]=x[b[which.min(RSS)]]
     }
   }
-  model=Cholesky(V, perm = TRUE, super = FALSE, Imult = 0)
-  L=as(model,"Matrix")
-  P=t(as(model, "pMatrix"))
-  X=matrix(0,nrow=B,ncol=n)                 #show B bootstrap samples
-  for(i in 1:B){
-    X[i,]=x*(P%*%(L%*%rnorm(n,mean=0,sd=1)))
-  }
-  return(X)
+  return(candidate)
 }
 
-Pvalue<-function(x, y, h, candidate, B=500){
-  n=length(x)
-  jump=0 
-  for(k in 1:length(candidate)){
-    jump<-jump+L[(candidate[k])]*(x>candidate[k])
-  }
-  hh=dpill(x,(y-jump))                #bandwidth selection
-  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
-  residual=y-jump-yhat
-  r=residual-mean(residual)       #centered residual
-  rr=DWB(r,h,B)                 #bootstrap residual
-  T=matrix(0,nrow=B,ncol=length(candidate))              #bootstrap statistics 
-  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
-  for(j in 1:B){
-    yy=yhat+rr[j,]            #bootstrap y           
-    LL=abs(screening(x,yy,h))
-    for(k in 1:length(candidate)){
-      T[j,k]=max(LL[(segment[k]:segment[k+1])])
+refine2<-function(x,y,h,candidate){       #step 2 (proposed II)
+  for(k in 1:5){
+    Candidate=c(0,candidate,1)
+    a=sample(1:length(candidate))
+    for(j in 1:length(a)){
+      index=which((x<Candidate[(a[j]+2)])*(x>Candidate[a[j]])==1)        #subsequence
+      xsub=x[index]
+      ysub=y[index]
+      b=which((x<(candidate[a[j]]+h))*(x>(candidate[a[j]]-h))==1)          #neighborhood of candidate
+      estimator=rep(0, length(b))
+      for(i in 1:length(b)){
+        z=(xsub>x[b[i]])+1-1
+        model=gam(ysub~z+s(xsub,5))
+        estimator[i]=(model$coefficients[2])^2
+      }
+      candidate[a[j]]=x[b[which.max(estimator)]]
     }
   }
-  p=apply((T-matrix(rep(abs(L)[candidate],B),nrow=B,byrow=TRUE)>0),2,mean)
-  return(p)
+  return(candidate)
 }
 
 #######################################Simulation1
-set.seed(18)
-n=200
-x=1:n
-h=10
-signal=1*(x>=40)-1*(x>=160)
-wave=0.1*(sin(2*pi*x/100)+2*sin(2*pi*x/60))
-############Scenario I: iid errors, no wave
-estimate1=NULL       #SaRa algorithm
-Estimate1=NULL       #proposed algorithm
-n1=NULL        #number of change points by SaRa algorithm
-N1=NULL       #number of change points by proposed algorithm
-for(i in 1:200){
-  e=rnorm(n=200,mean=0,sd=0.2)
+###############Scenario I: regular design
+set.seed(23)
+SD1=NULL                #standard errors
+n=400
+x=(1:n)/n
+signal=exp(x)+(x>0.2)-(x>0.5)+(x>0.8)
+h=10/n
+lambda=0.7
+###############Case 1 iid error
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+for(j in 1:100){
+  e=rnorm(n,mean=0,sd=0.2)
   y=signal+e
-  model=SARA(y, h)           #SaRa algorithm
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate1=c(estimate1, estimate)  
-  n1=c(n1,length(estimate))
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate1=c(Estimate1, estimate) 
-  N1=c(N1,length(estimate))
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
 }
-############Scenario II: correlated errors, no wave
-estimate2=NULL
-Estimate2=NULL
-n2=NULL
-N2=NULL
-for(i in 1:200){
-  e=arima.sim(n=300, list(ar = 0.6), sd = 0.16)[101:300]
-  y=signal+e  
-  model=SARA(y, h)           
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate2=c(estimate2, estimate) 
-  n2=c(n2,length(estimate)) 
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate2=c(Estimate2, estimate) 
-  N2=c(N2,length(estimate)) 
+SD1=rbind(SD1, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############Case 2  
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+for(j in 1:100){
+  e=rnorm(n,mean=0,sd=0.1*(1+(1:400)/200))
+  y=signal+e
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
 }
-############Scenario III: iid errors, with waves
-estimate3=NULL
-Estimate3=NULL
-n3=NULL
-N3=NULL
-for(i in 1:200){
-  e=rnorm(n=200,mean=0,sd=0.2)
-  y=signal+wave+e  
-  model=SARA(y, h)           
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate3=c(estimate3, estimate)
-  n3=c(n3,length(estimate))  
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate3=c(Estimate3, estimate) 
-  N3=c(N3,length(estimate)) 
+SD1=rbind(SD1, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############Case 3  
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+for(j in 1:100){
+  e=arima.sim(n=500, list(ar = 0.3), sd = 0.2)[101:500]
+  y=signal+e
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
 }
-############Scenario IV: correlated errors, with waves
-estimate4=NULL
-Estimate4=NULL
-n4=NULL
-N4=NULL
-for(i in 1:200){
-  e=arima.sim(n=300, list(ar = 0.6), sd = 0.16)[101:300]
-  y=signal+wave+e  
-  model=SARA(y, h)           
-  estimate=model$index[which(p.adjust(model$pV, "BH")<0.05)]
-  estimate4=c(estimate4, estimate)  
-  n4=c(n4,length(estimate)) 
-  L=screening(x,y,h)
-  candidate=localMax(abs(L),span=2*h)
-  p=Pvalue(x,y,h,candidate)
-  estimate=candidate[which(p.adjust(p,"BH")<0.05)]
-  Estimate4=c(Estimate4, estimate) 
-  N4=c(N4,length(estimate)) 
+SD1=rbind(SD1, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############Case 4  
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+for(j in 1:100){
+  e=0.7*(1+(1:400)/400)*arima.sim(n=500, list(ar = 0.3), sd = 0.2)[101:500]
+  y=signal+e
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
 }
+SD1=rbind(SD1, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
 
-#######################################show table
-rbind(c(sum(n1==0),sum(n1==1),sum(n1==2),sum(n1==3),sum(n1>3),mean(n1)),
-      c(sum(N1==0),sum(N1==1),sum(N1==2),sum(N1==3),sum(N1>3),mean(N1)),
-      c(sum(n2==0),sum(n2==1),sum(n2==2),sum(n2==3),sum(n2>3),mean(n2)),
-      c(sum(N2==0),sum(N2==1),sum(N2==2),sum(N2==3),sum(N2>3),mean(N2)),
-      c(sum(n3==0),sum(n3==1),sum(n3==2),sum(n3==3),sum(n3>3),mean(n3)),
-      c(sum(N3==0),sum(N3==1),sum(N3==2),sum(N3==3),sum(N3>3),mean(N3)),
-      c(sum(n4==0),sum(n4==1),sum(n4==2),sum(n4==3),sum(n4>3),mean(n4)),
-      c(sum(N4==0),sum(N4==1),sum(N4==2),sum(N4==3),sum(N4>3),mean(N4)))
-#######################################show figure
-par(mfrow=c(4,2))
-hist(estimate1,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario I)")
-hist(Estimate1,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario I)")
-hist(estimate2,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario II)")
-hist(Estimate2,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario II)")
-hist(estimate3,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario III)")
-hist(Estimate3,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario III)")
-hist(estimate4,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="SaRa (Scenario IV)")
-hist(Estimate4,breaks=50,xlim=c(0,200),ylim=c(0,200),xlab="locations",main="Proposed (Scenario IV)")
+################Scenario II: irregular design
+set.seed(33)
+SD2=NULL                #standard errors
+index=c(12,52,62,80,120,122,146,152,202,228,232,240,250,268,272,318,332,348,360,382)       #missing index
+x=x[-index]
+###############Case 1 iid error
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+total1=NULL
+total2=NULL
+total3=NULL
+for(j in 1:100){
+  e=rnorm(n,mean=0,sd=0.2)
+  y=(signal+e)[-index]
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
+  total1=c(total1,initial)
+  total2=c(total2,estimator)
+  total3=c(total3,Estimator)
+}
+SD2=rbind(SD2, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############show plot
+par(mfrow=c(4,3))
+hist(total1, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="initial, Case 1")
+hist(total2, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed I, Case 1")
+hist(total3, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed II, Case 1")
+
+###############Case 2  
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+total1=NULL
+total2=NULL
+total3=NULL
+for(j in 1:100){
+  e=rnorm(n,mean=0,sd=0.1*(1+(1:400)/200))
+  y=(signal+e)[-index]
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
+  total1=c(total1,initial)
+  total2=c(total2,estimator)
+  total3=c(total3,Estimator)
+}
+SD2=rbind(SD2, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############show plot
+hist(total1, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="initial, Case 2")
+hist(total2, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed I, Case 2")
+hist(total3, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed II, Case 2")
+
+###############Case 3  
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+total1=NULL
+total2=NULL
+total3=NULL
+for(j in 1:100){
+  e=arima.sim(n=500, list(ar = 0.3), sd = 0.2)[101:500]
+  y=(signal+e)[-index]
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
+  total1=c(total1,initial)
+  total2=c(total2,estimator)
+  total3=c(total3,Estimator)
+}
+SD2=rbind(SD2, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############show plot
+hist(total1, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="initial, Case 3")
+hist(total2, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed I, Case 3")
+hist(total3, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed II, Case 3")
+
+###############Case 4  
+initial1=NULL           #initial estimator of tau1
+initial2=NULL
+initial3=NULL
+estimator1=NULL           #refined (proposed I) estimator of tau1 
+estimator2=NULL
+estimator3=NULL
+Estimator1=NULL           #refined (proposed II) estimator of tau1 
+Estimator2=NULL
+Estimator3=NULL
+total1=NULL
+total2=NULL
+total3=NULL
+for(j in 1:100){
+  e=0.7*(1+(1:400)/400)*arima.sim(n=500, list(ar = 0.3), sd = 0.2)[101:500]
+  y=(signal+e)[-index]
+  D=screening(x,y,h)
+  initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+  if(min(abs(initial-0.2))<=h) initial1=c(initial1, initial[which.min(abs(initial-0.2))])
+  if(min(abs(initial-0.5))<=h) initial2=c(initial2, initial[which.min(abs(initial-0.5))])
+  if(min(abs(initial-0.8))<=h) initial3=c(initial3, initial[which.min(abs(initial-0.8))])
+  estimator=refine1(x,y,h,initial)
+  if(min(abs(estimator-0.2))<=h) estimator1=c(estimator1, estimator[which.min(abs(estimator-0.2))])
+  if(min(abs(estimator-0.5))<=h) estimator2=c(estimator2, estimator[which.min(abs(estimator-0.5))])
+  if(min(abs(estimator-0.8))<=h) estimator3=c(estimator3, estimator[which.min(abs(estimator-0.8))])
+  Estimator=refine2(x,y,h,initial)
+  if(min(abs(Estimator-0.2))<=h) Estimator1=c(Estimator1, Estimator[which.min(abs(Estimator-0.2))])
+  if(min(abs(Estimator-0.5))<=h) Estimator2=c(Estimator2, Estimator[which.min(abs(Estimator-0.5))])
+  if(min(abs(Estimator-0.8))<=h) Estimator3=c(Estimator3, Estimator[which.min(abs(Estimator-0.8))])
+  total1=c(total1,initial)
+  total2=c(total2,estimator)
+  total3=c(total3,Estimator)
+}
+SD2=rbind(SD2, c(sd(initial1),sd(initial2),sd(initial3)), c(sd(estimator1),sd(estimator2),sd(estimator3)), c(sd(Estimator1),sd(Estimator2),sd(Estimator3)))
+###############show plot
+hist(total1, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="initial, Case 4")
+hist(total2, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed I, Case 4")
+hist(total3, breaks=60, xlab="x", ylab="frequency", xlim=c(0,1), ylim=c(0,100), main="proposed II, Case 4")
+
+##############show table
+round(cbind(SD1,SD2)*1000,2)

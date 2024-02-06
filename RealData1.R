@@ -4,16 +4,23 @@ library(Matrix)
 library(DNAcopy)
 library(tilingArray)
 library(cumSeg)
-
-#This code needs to be executed on the Windows operating system
+library(mgcv)
+library(imputeTS)
+library(mvtnorm)
+library(np)
 
 ##############################Real Data
-CGHdata <- read.csv("CGHdataset.csv", header=TRUE)
-set.seed(12)
+CGHdata <- read.csv("C:/Users/Acer/Desktop/My Document/Documents/Research/Projects/change points(bootstrap)/CGHdataset.csv", header=TRUE)
+index=c(6,19,20,21)
+data=CGHdata[2:2301,(1+3*index)]               
+n=nrow(data)
+d=ncol(data)
+for (i in 1:d){
+  data[,i]=na_ma(data[,i],k=5,weighting="linear")        #imputation for methods 1-3
+}
 
 ###########################define some functions 
-#Estimate the standard deviation of the intensities
-estimateSigma<-function (Y, h = 10) {  
+estimateSigma<-function (Y, h = 10) {       #Estimate the standard deviation of the intensities
   n = length(Y)
   YBar = rep(0, n)
   for (i in 1:n) {
@@ -24,19 +31,7 @@ estimateSigma<-function (Y, h = 10) {
   return(sqrt(var(Y - YBar) * (2 * h + 1)/(2 * h)))
 }
 
-#Calculate the value for local diagnostic function
-localDiagnostic<-function (y, h) { 
-  yy = c(rep(0, h - 1), y, rep(0, h))
-  n = length(y)
-  z = rep(0, n)
-  for(i in 1:n){
-    z[i]=sum(yy[i:(h+i-1)])/h-sum(yy[(h+i):(2*h-1+i)])/h
-  }
-  return(z)
-}
-
-#Get the local maximizers of local diagnostic function
-localMax<-function (y, span = 5) {  
+localMax<-function (y, span = 5) {           #Get the local maximizers of local diagnostic function  
   if (length(y) < span * 2 + 1) 
     return(NULL)
   n = length(y)
@@ -48,299 +43,277 @@ localMax<-function (y, span = 5) {
   return(index)
 }
 
-clean<-function (LocalM, h) 
-{
-  len <- length(LocalM)
-  rm.list <- NULL
-  for (i in 1:(len - 1)) {
-    if (LocalM[i] >= LocalM[i + 1] - h) {
-      rm.list <- c(rm.list, i)
-    }
-  }
-  if (length(rm.list) > 0) {
-    LocalM <- LocalM[-as.vector(rm.list)]
-  }
-  return(LocalM = LocalM)
-}
-
-SARAp<-function (Y, h, hh = 2 * h, sigma = NULL) { 
-  n = length(Y)
-  LDF = localDiagnostic(Y, h)
-  LDF.pos = LDF
-  LDF.neg = -LDF
-  if (is.null(sigma)) 
-    sigma = estimateSigma(Y, h = max(3, 2 * floor(log(n))))
-  pV.pos = 1 - 2 * pnorm(LDF.pos/(sqrt(2/h) * sigma))
-  LocalMax = localMax(LDF.pos, span = hh)
-  LocalMax = clean(LocalMax, h)
-  LocalMaxValue = pV.pos[LocalMax]
-  pV.neg = 1 - 2 * pnorm(LDF.neg/(sqrt(2/h) * sigma))
-  LocalMin = localMax(LDF.neg, span = hh)
-  LocalMin = clean(LocalMin, h)
-  LocalMinValue = pV.neg[LocalMin]
-  LocalExt <- c(LocalMax, LocalMin)
-  LocalExtValue <- c(LocalMaxValue, LocalMinValue)
-  LocalExtValue <- LocalExtValue[order(LocalExt)]
-  LocalExt <- sort(LocalExt)
-  return(list(index = LocalExt, pV = LocalExtValue))
-}
-
-#Get the inverse cumulative distribution function of local min p-values
-fInverse<-function (n = 10000, h = 10, hh = 2 * h, precise = 10000, simT = 100) { 
-  empirical = NULL
-  for (i in 1:simT) {
-    Y = rnorm(n)
-    LDF = localDiagnostic(Y, h)
-    LDF.pos = LDF
-    LDF.neg = -LDF
-    sigma = 1
-    index.pos = localMax(y = LDF.pos, span = hh)
-    pV.pos = 1 - 2 * pnorm(LDF.pos[index.pos]/(sqrt(2/h) * 
-                                                 sigma))
-    index.neg = localMax(y = LDF.neg, span = hh)
-    pV.neg = 1 - 2 * pnorm(LDF.neg[index.neg]/(sqrt(2/h) * 
-                                                 sigma))
-    index <- c(index.pos, index.neg)
-    pv <- c(pV.pos, pV.neg)
-    pv <- pv[order(index)]
-    index <- sort(index)
-    len <- length(index)
-    rm.list <- NULL
-    for (j in 1:(len - 1)) {
-      if (index[j] >= index[j + 1] - h) {
-        rm.list <- c(rm.list, j)
-      }
-    }
-    if (length(rm.list) > 0) {
-      pv <- pv[-rm.list]
-    }
-    empirical <- c(empirical, pv)
-    if (length(empirical) > 10 * precise) 
-      break
-  }
-  return(quantile(empirical, probs = c(0:precise)/precise))
-}
-
-SARA<-function (Y, h = 10, hh = 2 * h, FINV = NULL, sigma = NULL, precise = 10000) {
-  object = SARAp(Y = Y, h = h, hh = hh, sigma = sigma)
-  index = object$index
-  pV = object$pV
-  if (is.null(FINV)) 
-    FINV = fInverse(n = length(Y), h = h, hh = hh, precise = precise, 
-                    simT = 100)
-  pVcorr = pV
-  for (i in 1:length(pV)) {
-    pVcorr[i] = (length(which(FINV < pV[i])))/(precise + 
-                                                 1)
-  }
-  return(list(index = index, pV = pVcorr))
-}
-
 screening<-function(x, y, h){       #local linear smoothing (rightlimit-leftlimit)
   n=length(x)
-  xx=1:(n+2*h)
-  yy=c(rep(y[1],h),y,rep(y[n],h))       #create data outside the boundaries
-  right=rep(0,n)     #rightlimit for xx[1:n]
-  left=rep(0,n)       #leftlimit for xx[(1+2*h):(n+2*h)]
-  for (i in 1:n){
-    model=locpoly(xx[i:(i+2*h)],yy[i:(i+2*h)],kernel="epanech",bandwidth=h,gridsize=1+2*h)
-    right[i]=model$y[1]
-    left[i]=model$y[1+2*h]
+  xx=c(2*x[1]-x[sort(which(x<(x[1]+h))[-1],decreasing=T)], x, 2*x[n]-x[sort(which(x>(x[n]-h)),decreasing=T)[-1]])
+  yy=c(2*y[1]-y[sort(which(x<(x[1]+h))[-1],decreasing=T)], y, 2*y[n]-y[sort(which(x>(x[n]-h)),decreasing=T)[-1]])       #create data outside the boundaries
+  rkernal<-function(t){
+    0.75*(1-((xx-t)/h)^2)*(((xx-t)/h)>0)*(((xx-t)/h)<=1)
   }
-  L=c(rep(0,h),right[(2*h+1):n]-left[1:(n-2*h)],rep(0,h))
-  return(L)
+  lkernal<-function(t){
+    0.75*(1-((xx-t)/h)^2)*(((xx-t)/h)>=-1)*(((xx-t)/h)<=0)
+  }
+  rweight<-function(t){
+    rkernal(t)*(sum(rkernal(t)*(xx-t)^2)-(xx-t)*sum(rkernal(t)*(xx-t)))
+  }
+  lweight<-function(t){
+    lkernal(t)*(sum(lkernal(t)*(xx-t)^2)-(xx-t)*sum(lkernal(t)*(xx-t)))
+  }
+  rlimit<-function(t){
+    sum(rweight(t)*yy)/sum(rweight(t))
+  }
+  llimit<-function(t){
+    sum(lweight(t)*yy)/sum(lweight(t))
+  }
+  right=rep(0,n)     #rightlimit for x[1:n]
+  left=rep(0,n)       #leftlimit for x[1:n]
+  for (i in 1:n){
+    right[i]=rlimit(x[i])
+    left[i]=llimit(x[i])
+  }
+  D=abs(right-left)
+  return(D)
 }
 
-DWB<-function(x,l,B=500){    #dependent wild bootstrap 
-  n=length(x)
-  V=as(as(diag(0,n), "diagonalMatrix"), "CsparseMatrix")
-  for (i in 1:n){
-    for (j in 1:n){
-      if (abs(i-j)<l)
-        V[i,j]=(1-abs(i-j)/l)            #Bartlett kernel
+refine1<-function(x,y,h,candidate){       #step 2 (proposed I)
+  for(k in 1:5){
+    Candidate=c(0,candidate,1)
+    a=sample(1:length(candidate))
+    for(j in 1:length(a)){
+      index=which((x<Candidate[(a[j]+2)])*(x>Candidate[a[j]])==1)        #subsequence
+      xsub=x[index]
+      ysub=y[index]
+      b=which((x<(candidate[a[j]]+h))*(x>(candidate[a[j]]-h))==1)          #neighborhood of candidate
+      RSS=rep(0, length(b))
+      for(i in 1:length(b)){
+        z=(xsub>x[b[i]])+1-1
+        model=gam(ysub~z+s(xsub), family=gaussian, method="GCV.Cp")
+        RSS[i]=sum((model$residuals)^2)
+      }
+      candidate[a[j]]=x[b[which.min(RSS)]]
     }
   }
-  model=Cholesky(V, perm = TRUE, super = FALSE, Imult = 0)
-  L=as(model,"Matrix")
-  P=t(as(model, "pMatrix"))
-  X=matrix(0,nrow=B,ncol=n)                 #show B bootstrap samples
-  for(i in 1:B){
-    X[i,]=x*(P%*%(L%*%rnorm(n,mean=0,sd=1)))
-  }
-  return(X)
+  return(candidate)
 }
 
-Pvalue<-function(x, y, h, candidate, B=500){
-  n=length(x)
-  jump=0 
+refine2<-function(x,y,h,candidate){       #step 2 (proposed II)
+  for(k in 1:5){
+    Candidate=c(0,candidate,1)
+    a=sample(1:length(candidate))
+    for(j in 1:length(a)){
+      index=which((x<Candidate[(a[j]+2)])*(x>Candidate[a[j]])==1)        #subsequence
+      xsub=x[index]
+      ysub=y[index]
+      b=which((x<(candidate[a[j]]+h))*(x>(candidate[a[j]]-h))==1)          #neighborhood of candidate
+      estimator=rep(0, length(b))
+      for(i in 1:length(b)){
+        z=(xsub>x[b[i]])+1-1
+        model=gam(ysub~z+s(xsub), family=gaussian, method="GCV.Cp")
+        estimator[i]=(model$coefficients[2])^2
+      }
+      candidate[a[j]]=x[b[which.max(estimator)]]
+    }
+  }
+  return(candidate)
+}
+
+Pvalue<-function(x,y,candidate,B=500){
+  x2=c(0,(candidate[1:(length(candidate)-1)]+candidate[2:length(candidate)])/2,1.01)
+  pvalue=1:length(candidate)
   for(k in 1:length(candidate)){
-    jump<-jump+L[(candidate[k])]*(x>candidate[k])
-  }
-  hh=dpill(x,(y-jump))                #bandwidth selection
-  yhat=locpoly(x,(y-jump), bandwidth=hh, gridsize=n)$y         #standard local linear regression
-  residual=y-jump-yhat
-  r=residual-mean(residual)       #centered residual
-  rr=DWB(r,h,B)                 #bootstrap residual
-  T=matrix(0,nrow=B,ncol=length(candidate))              #bootstrap statistics 
-  segment=c(1,candidate[-length(candidate)]+floor(diff(candidate)/2),n)
-  for(j in 1:B){
-    yy=yhat+rr[j,]            #bootstrap y           
-    LL=abs(screening(x,yy,h))
-    for(k in 1:length(candidate)){
-      T[j,k]=max(LL[(segment[k]:segment[k+1])])
+    subx=x[which((x>x2[k])&(x<x2[k+1]))]
+    suby=y[which((x>x2[k])&(x<x2[k+1]))]
+    z=(subx>candidate[k])+1-1
+    model=gam(suby~z+s(subx),family=gaussian, method="GCV.Cp")           
+    fitted=model$fitted.values-model$coefficients[2]*z
+    residual=model$residuals
+    #dependent wild bootstrap
+    l=3/length(x)
+    estimator=rep(0,B)
+    Sigma=diag(length(subx))
+    for(i in 1:(length(subx)-1)){ for(j in (i+1):(length(subx))){ Sigma[i,j]=(1-abs((subx[i]-subx[j])/l))*(abs((subx[i]-subx[j])/l)<1)}}
+    for(i in 2:(length(subx))){ for(j in 1:(i-1)){ Sigma[i,j]=Sigma[j,i]}}
+    E=rmvnorm(n=B, mean=rep(0, length(residual)), sigma=Sigma)
+    for(b in 1:B){
+      yy=fitted+residual*E[b,]
+      estimator[b]=gam(yy~z+s(subx),family=gaussian, method="GCV.Cp")$coefficients[2]
     }
+    pvalue[k]=sum(abs(estimator)>abs(model$coefficients[2]))/B
   }
-  p=apply((T-matrix(rep(abs(L)[candidate],B),nrow=B,byrow=TRUE)>0),2,mean)
-  return(p)
+  return(pvalue)
 }
 
-
-##############################sample X2821
-y=na.omit(CGHdata$X2821_log2ratio) 
-n=length(y)
-y=y[1:n]
-x=1:n
-n1=1:5       #estimated number of change points for methods 1-5
+##############################sample X1333-4
 #######CBS
-CBS=DNAcopy::segment(CNA(y, rep(1,n), 1:n))
-estimate=CBS$output[,4]
-estimate1=estimate[-length(CBS$output[,4])]
-n1[1]=length(estimate1)
+set.seed(2)
+num1=rep(0,5)
+y1=data[,1]
+CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
+num1[1]=length(CBS$output[,4])-1
+estimate1=CBS$output[1:num1[1],4]
+######cumSeg
+estimate2=jumpoints(y1,k=60,output="2")$psi
+num1[2]=length(estimate2)
 ######DP
-model=tilingArray::segment(y, maxseg=60, maxk=n/2)
-estimate2=model@breakpoints[[which.max(logLik(model, penalty="BIC"))]][,"estimate"]
-n1[2]=length(estimate2)
-#######cumSeg
-estimate3=jumpoints(y,k=60,output="2")$psi
-n1[3]=length(estimate3)
-######SaRa
-h=10
-model=SARA(y,h)
-estimate4=model$index[which(p.adjust(model$pV, "BH")<0.1)]
-n1[4]=length(estimate4)
-#######Proposed
-L=screening(x,y,h)
-candidate=localMax(abs(L),span=2*h)
-p=Pvalue(x,y,h,candidate)
-estimate5=candidate[which(p.adjust(p,"BH")<0.1)]
-n1[5]=length(estimate5)
-
-##############################sample X1533.10
-y=na.omit(CGHdata$X1533.10_log2ratio) 
-n=length(y)
-y=y[1:n]
-x=1:n
-n2=1:5       #estimated number of change points for methods 1-5
-#######CBS
-CBS=DNAcopy::segment(CNA(y, rep(1,n), 1:n))
-estimate=CBS$output[,4]
-estimate1=estimate[-length(CBS$output[,4])]
-n2[1]=length(estimate1)
-######DP
-model=tilingArray::segment(y, maxseg=60, maxk=n/2)
-estimate2=model@breakpoints[[which.max(logLik(model, penalty="BIC"))]][,"estimate"]
-n2[2]=length(estimate2)
-#######cumSeg
-estimate3=jumpoints(y,k=60,output="2")$psi
-n2[3]=length(estimate3)
-######SaRa
-h=10
-model=SARA(y,h)
-estimate4=model$index[which(p.adjust(model$pV, "BH")<0.1)]
-n2[4]=length(estimate4)
-#######Proposed
-L=screening(x,y,h)
-candidate=localMax(abs(L),span=2*h)
-p=Pvalue(x,y,h,candidate)
-estimate5=candidate[which(p.adjust(p,"BH")<0.1)]
-n2[5]=length(estimate5)
-
-##############################sample X1211.2
-y=na.omit(CGHdata$X1211.2_log2ratio) 
-n=length(y)
-y=y[1:n]
-x=1:n
-n3=1:5       #estimated number of change points for methods 1-5
-#######CBS
-CBS=DNAcopy::segment(CNA(y, rep(1,n), 1:n))
-estimate=CBS$output[,4]
-estimate1=estimate[-length(CBS$output[,4])]
-n3[1]=length(estimate1)
-######DP
-model=tilingArray::segment(y, maxseg=60, maxk=n/2)
-estimate2=model@breakpoints[[which.max(logLik(model, penalty="BIC"))]][,"estimate"]
-n3[2]=length(estimate2)
-#######cumSeg
-estimate3=jumpoints(y,k=60,output="2")$psi
-n3[3]=length(estimate3)
-######SaRa
-h=10
-model=SARA(y,h)
-estimate4=model$index[which(p.adjust(model$pV, "BH")<0.1)]
-n3[4]=length(estimate4)
-#######Proposed
-L=screening(x,y,h)
-candidate=localMax(abs(L),span=2*h)
-p=Pvalue(x,y,h,candidate)
-estimate5=candidate[which(p.adjust(p,"BH")<0.1)]
-n3[5]=length(estimate5)
-
+DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
+num1[3]=which.max(logLik(DP, penalty="BIC"))-1
+estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######Proposed I
+index=which(is.na(CGHdata[2:2301,19])==1)
+x=((1:n)/n)[-index]
+y=na.omit(CGHdata[2:2301,19])
+h=20/length(x)
+D=screening(x,y,h)
+lambda=4*mad(D)
+initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+candidate=refine1(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num1[4]=length(estimate4)
+######Proposed II
+candidate=refine2(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num1[5]=length(estimate5)
 ##############show figure
 par(mfrow=c(2,3))
 estimate11=c(0,estimate1,n)
 fitted1=NULL
 for(i in 1:(length(estimate1)+1)){
-  m=mean(y[(estimate11[i]+1):estimate11[i+1]])
+  m=mean(y1[(estimate11[i]+1):estimate11[i+1]])
   fitted1=c(fitted1,rep(m, estimate11[i+1]-estimate11[i]))
 }
-plot(y,xlab="locations",main="CBS",pch=20,col=8)
-lines(fitted1,col=2,lwd=2)
+plot((1:n)/n,y1,xlab="locations",main="CBS",pch=20,col=8)
+lines((1:n)/n,fitted1,col=2,lwd=2)
 estimate22=c(0,estimate2,n)
 fitted2=NULL
 for(i in 1:(length(estimate2)+1)){
-  m=mean(y[(estimate22[i]+1):estimate22[i+1]])
+  m=mean(y1[(estimate22[i]+1):estimate22[i+1]])
   fitted2=c(fitted2,rep(m, estimate22[i+1]-estimate22[i]))
 }
-plot(y,xlab="locations",main="DP",pch=20,col=8)
-lines(fitted2,col=2,lwd=2)
+plot((1:n)/n,y1,xlab="locations",main="cumSeg",pch=20,col=8)
+lines((1:n)/n,fitted2,col=2,lwd=2)
 estimate33=c(0,estimate3,n)
 fitted3=NULL
 for(i in 1:(length(estimate3)+1)){
-  m=mean(y[(estimate33[i]+1):estimate33[i+1]])
+  m=mean(y1[(estimate33[i]+1):estimate33[i+1]])
   fitted3=c(fitted3,rep(m, estimate33[i+1]-estimate33[i]))
 }
-plot(y,xlab="locations",main="cumSeg",pch=20,col=8)
-lines(fitted3,col=2,lwd=2)
+plot((1:n)/n,y1,xlab="locations",main="DP",pch=20,col=8)
+lines((1:n)/n,fitted3,col=2,lwd=2)
 estimate44=c(0,estimate4,n)
 fitted4=NULL
 for(i in 1:(length(estimate4)+1)){
-  m=mean(y[(estimate44[i]+1):estimate44[i+1]])
-  fitted4=c(fitted4,rep(m, estimate44[i+1]-estimate44[i]))
+  yy=y1[(estimate44[i]+1):estimate44[i+1]]
+  xx=((estimate44[i]+1):estimate44[i+1])/n
+  fitted4=c(fitted4, npreg(yy~xx, bws=0.2*length(xx)/n)$mean)
 }
-plot(y,xlab="locations",main="SaRa",pch=20,col=8)
-lines(fitted4,col=2,lwd=2)
-jump=0 
-for(i in 1:length(estimate5)){
-  jump<-jump+L[estimate5[i]]*(x>estimate5[i])
+plot((1:n)/n,y1,xlab="locations",main="Proposed I",pch=20,col=8)
+lines((1:n)/n,fitted4,col=2,lwd=2)
+estimate55=c(0,estimate5,n)
+fitted5=NULL
+for(i in 1:(length(estimate5)+1)){
+  yy=y1[(estimate55[i]+1):estimate55[i+1]]
+  xx=((estimate55[i]+1):estimate55[i+1])/n
+  fitted5=c(fitted5, npreg(yy~xx, bws=0.2*length(xx)/n)$mean)
 }
-hh=dpill(x,(y-jump))
-fitted5=locpoly(x,(y-jump), degree=0, bandwidth=hh, gridsize=n)$y+jump
-plot(y,xlab="locations",main="Proposed",pch=20,col=8)
-lines(fitted5,col=2,lwd=2)
-residual=y-fitted5
+plot((1:n)/n,y1,xlab="locations",main="Proposed II",pch=20,col=8)
+lines((1:n)/n,fitted5,col=2,lwd=2)
+residual=y1-fitted5
 pacf(residual,lag.max=20,main="PACF")
 
-plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,4),main="data",pch=16,col="black")
-plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="CBS",pch=16,col=8)
-lines(x[1301:1400],fitted1[1301:1400],col=2,lwd=2)
-plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="DP",pch=16,col=8)
-lines(x[1301:1400],fitted2[1301:1400],col=2,lwd=2)
-plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="cumSeg",pch=16,col=8)
-lines(x[1301:1400],fitted3[1301:1400],col=2,lwd=2)
-plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="SaRa",pch=16,col=8)
-lines(x[1301:1400],fitted4[1301:1400],col=2,lwd=2)
-plot(x[1301:1400],y[1301:1400],xlab="locations",ylab="y",ylim=c(-0.5,0.5),main="Proposed",pch=16,col=8)
-lines(x[1301:1400],fitted5[1301:1400],col=2,lwd=2)
+##############################sample X1533-1
+num2=rep(0,5)
+y1=data[,2]
+CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
+num2[1]=length(CBS$output[,4])-1
+estimate1=CBS$output[1:num1[1],4]
+######cumSeg
+estimate2=jumpoints(y1,k=60,output="2")$psi
+num2[2]=length(estimate2)
+######DP
+DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
+num2[3]=which.max(logLik(DP, penalty="BIC"))-1
+estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######Proposed I
+index=which(is.na(CGHdata[2:2301,58])==1)
+x=((1:n)/n)[-index]
+y=na.omit(CGHdata[2:2301,58])
+h=20/length(x)
+D=screening(x,y,h)
+lambda=4*mad(D)
+initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+candidate=refine1(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num2[4]=length(estimate4)
+######Proposed II
+candidate=refine2(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num2[5]=length(estimate5)
+
+##############################sample X1533-10
+num3=rep(0,5)
+y1=data[,3]
+CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
+num3[1]=length(CBS$output[,4])-1
+estimate1=CBS$output[1:num1[1],4]
+######cumSeg
+estimate2=jumpoints(y1,k=60,output="2")$psi
+num3[2]=length(estimate2)
+######DP
+DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
+num3[3]=which.max(logLik(DP, penalty="BIC"))-1
+estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######Proposed I
+index=which(is.na(CGHdata[2:2301,61])==1)
+x=((1:n)/n)[-index]
+y=na.omit(CGHdata[2:2301,61])
+h=20/length(x)
+D=screening(x,y,h)
+lambda=4*mad(D)
+initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+candidate=refine1(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num3[4]=length(estimate4)
+######Proposed II
+candidate=refine2(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num3[5]=length(estimate5)
+
+##############################sample X1533-13
+num4=rep(0,5)
+y1=data[,4]
+CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
+num4[1]=length(CBS$output[,4])-1
+estimate1=CBS$output[1:num1[1],4]
+######cumSeg
+estimate2=jumpoints(y1,k=60,output="2")$psi
+num4[2]=length(estimate2)
+######DP
+DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
+num4[3]=which.max(logLik(DP, penalty="BIC"))-1
+estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######Proposed I
+index=which(is.na(CGHdata[2:2301,64])==1)
+x=((1:n)/n)[-index]
+y=na.omit(CGHdata[2:2301,64])
+h=20/length(x)
+D=screening(x,y,h)
+lambda=4*mad(D)
+initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
+candidate=refine1(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num4[4]=length(estimate4)
+######Proposed II
+candidate=refine2(x,y,h,initial)
+pvalue=Pvalue(x,y,candidate)
+estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
+num4[5]=length(estimate5)
 
 ############show table
-rbind(n1,n2,n3)
+rbind(num1,num2,num3,num4)
