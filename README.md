@@ -10,5 +10,5 @@ Code
 
 'RealData1.R' is the R code for real data analysis (Bladder tumor aCGH data) (Table 2 and Figure 3) in the paper.
 
-'RealData2.R' is the R code for real data analysis (High-frequency  nancial data) (Figure 4) in the paper.
+'RealData2.R' is the R code for real data analysis (High-frequency financial data) (Figure 4) in the paper.
 
