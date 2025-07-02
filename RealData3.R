@@ -1,15 +1,15 @@
-library(seqbbs) 
 library(KernSmooth)
 library(MASS)
 library(Matrix)
-library(DNAcopy)
-library(tilingArray)
-library(cumSeg)
 library(mgcv)
-library(zoo)
 library(mvtnorm)
 library(np)
-library(SCHACE)
+
+##############################Get real data
+load("~/Research/Projects/change points(bootstrap)/data4.RData")
+y=as.vector(t(data4[4,1:566,1+(1:4-1)*1200]))      #data20[4st stock, days 1-566, open prices]
+n=length(y)
+x=(1:n)/n
 
 ###########################define some functions 
 estimateSigma<-function (Y, h = 10) {       #Estimate the standard deviation of the intensities
@@ -135,90 +135,16 @@ Pvalue<-function(x,y,candidate,B=500){
   return(pvalue)
 }
 
-
-#################################real data 2
-test_filename <- system.file("extdata", "paper.txt", package="seqbbs")
-ratios <- read.table(test_filename, header = FALSE)
-y1=ratios$V1               
-n=length(y1)     
-num1=rep(0,6)
-#######CBS
+############################Real Data 2
 set.seed(2)
-CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
-num1[1]=length(CBS$output[,4])-1
-estimate1=CBS$output[1:num1[1],4]
-######cumSeg
-estimate2=jumpoints(y1,k=60,output="2")$psi
-num1[2]=length(estimate2)
-######DP
-DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
-num1[3]=which.max(logLik(DP, penalty="BIC"))-1
-estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
-######SCHACE
-SCHACE=main.SCHACE(y1)
-num1[4]=SCHACE$`number of CPs`
-######Proposed I
-x=(1:n)/n
-y=y1
-h=20/length(x)
+h=20/n
 D=screening(x,y,h)
 lambda=4*mad(D)
 initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
-candidate=refine1(x,y,h,initial)
-pvalue=Pvalue(x,y,candidate)
-estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num1[5]=length(estimate4)
-######Proposed II
 candidate=refine2(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
-estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num1[6]=length(estimate5)
-##############show figure
-par(mfrow=c(2,3))
-estimate11=c(0,estimate1,n)
-fitted1=NULL
-for(i in 1:(length(estimate1)+1)){
-  m=mean(y1[(estimate11[i]+1):estimate11[i+1]])
-  fitted1=c(fitted1,rep(m, estimate11[i+1]-estimate11[i]))
-}
-plot((1:n)/n,y1,xlab="locations",main="CBS",pch=20,col=8)
-lines((1:n)/n,fitted1,col=2,lwd=2)
-estimate22=c(0,estimate2,n)
-fitted2=NULL
-for(i in 1:(length(estimate2)+1)){
-  m=mean(y1[(estimate22[i]+1):estimate22[i+1]])
-  fitted2=c(fitted2,rep(m, estimate22[i+1]-estimate22[i]))
-}
-plot((1:n)/n,y1,xlab="locations",main="cumSeg",pch=20,col=8)
-lines((1:n)/n,fitted2,col=2,lwd=2)
-estimate33=c(0,estimate3,n)
-fitted3=NULL
-for(i in 1:(length(estimate3)+1)){
-  m=mean(y1[(estimate33[i]+1):estimate33[i+1]])
-  fitted3=c(fitted3,rep(m, estimate33[i+1]-estimate33[i]))
-}
-plot((1:n)/n,y1,xlab="locations",main="DP",pch=20,col=8)
-lines((1:n)/n,fitted3,col=2,lwd=2)
-#estimate44=c(0,estimate4,n)
-#fitted4=NULL
-#for(i in 1:(length(estimate4)+1)){
-#yy=y1[(estimate44[i]+1):estimate44[i+1]]
-#xx=((estimate44[i]+1):estimate44[i+1])/n
-#fitted4=c(fitted4, npreg(yy~xx, bws=0.2*length(xx)/n)$mean)
-#}
-plot((1:n)/n,y1,xlab="locations",main="SCHACE",pch=20,col=8)
-lines((1:n)/n,SCHACE$`predicted y`,col=2,lwd=2)
-#lines((1:n)/n,fitted4,col=2,lwd=2)
-estimate55=c(0,estimate5,n)
-fitted5=NULL
-for(i in 1:(length(estimate5)+1)){
-  yy=y1[(estimate55[i]+1):estimate55[i+1]]
-  xx=((estimate55[i]+1):estimate55[i+1])/n
-  fitted5=c(fitted5, npreg(yy~xx, bws=0.2*length(xx)/n)$mean)
-}
-plot((1:n)/n,y1,xlab="locations",main="Proposed II",pch=20,col=8)
-lines((1:n)/n,fitted5,col=2,lwd=2)
-residual=y1-fitted5
-pacf(residual,lag.max=20,main="PACF")
+estimate=candidate[which(p.adjust(pvalue, "BH")<0.05)]
 
-num1
+##############show figure
+plot(y~x, type="l", main="hourly prices")
+abline(v=estimate, lty=2)

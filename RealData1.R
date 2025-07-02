@@ -5,18 +5,19 @@ library(DNAcopy)
 library(tilingArray)
 library(cumSeg)
 library(mgcv)
-library(imputeTS)
+library(zoo)
 library(mvtnorm)
 library(np)
+library(SCHACE)
 
 ##############################Real Data
-CGHdata <- read.csv("C:/Users/Acer/Desktop/My Document/Documents/Research/Projects/change points(bootstrap)/CGHdataset.csv", header=TRUE)
+CGHdata<- read.csv("~/Research/Projects/change points(bootstrap)/CGHdataset.csv")
 index=c(6,19,20,21)
 data=CGHdata[2:2301,(1+3*index)]               
 n=nrow(data)
 d=ncol(data)
 for (i in 1:d){
-  data[,i]=na_ma(data[,i],k=5,weighting="linear")        #imputation for methods 1-3
+  data[,i]=na.approx(data[,i])        #imputation for methods 1-4
 }
 
 ###########################define some functions 
@@ -146,7 +147,7 @@ Pvalue<-function(x,y,candidate,B=500){
 ##############################sample X1333-4
 #######CBS
 set.seed(2)
-num1=rep(0,5)
+num1=rep(0,6)
 y1=data[,1]
 CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
 num1[1]=length(CBS$output[,4])-1
@@ -158,6 +159,9 @@ num1[2]=length(estimate2)
 DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
 num1[3]=which.max(logLik(DP, penalty="BIC"))-1
 estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######SCHACE
+SCHACE=main.SCHACE(y1)
+num1[4]=SCHACE$`number of CPs`
 ######Proposed I
 index=which(is.na(CGHdata[2:2301,19])==1)
 x=((1:n)/n)[-index]
@@ -169,12 +173,12 @@ initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
 candidate=refine1(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num1[4]=length(estimate4)
+num1[5]=length(estimate4)
 ######Proposed II
 candidate=refine2(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num1[5]=length(estimate5)
+num1[6]=length(estimate5)
 ##############show figure
 par(mfrow=c(2,3))
 estimate11=c(0,estimate1,n)
@@ -201,15 +205,16 @@ for(i in 1:(length(estimate3)+1)){
 }
 plot((1:n)/n,y1,xlab="locations",main="DP",pch=20,col=8)
 lines((1:n)/n,fitted3,col=2,lwd=2)
-estimate44=c(0,estimate4,n)
-fitted4=NULL
-for(i in 1:(length(estimate4)+1)){
-  yy=y1[(estimate44[i]+1):estimate44[i+1]]
-  xx=((estimate44[i]+1):estimate44[i+1])/n
-  fitted4=c(fitted4, npreg(yy~xx, bws=0.2*length(xx)/n)$mean)
-}
-plot((1:n)/n,y1,xlab="locations",main="Proposed I",pch=20,col=8)
-lines((1:n)/n,fitted4,col=2,lwd=2)
+#estimate44=c(0,estimate4,n)
+#fitted4=NULL
+#for(i in 1:(length(estimate4)+1)){
+#yy=y1[(estimate44[i]+1):estimate44[i+1]]
+#xx=((estimate44[i]+1):estimate44[i+1])/n
+#fitted4=c(fitted4, npreg(yy~xx, bws=0.2*length(xx)/n)$mean)
+#}
+plot((1:n)/n,y1,xlab="locations",main="SCHACE",pch=20,col=8)
+lines((1:n)/n,SCHACE$`predicted y`,col=2,lwd=2)
+#lines((1:n)/n,fitted4,col=2,lwd=2)
 estimate55=c(0,estimate5,n)
 fitted5=NULL
 for(i in 1:(length(estimate5)+1)){
@@ -223,7 +228,7 @@ residual=y1-fitted5
 pacf(residual,lag.max=20,main="PACF")
 
 ##############################sample X1533-1
-num2=rep(0,5)
+num2=rep(0,6)
 y1=data[,2]
 CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
 num2[1]=length(CBS$output[,4])-1
@@ -235,6 +240,9 @@ num2[2]=length(estimate2)
 DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
 num2[3]=which.max(logLik(DP, penalty="BIC"))-1
 estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######SCHACE
+SCHACE=main.SCHACE(y1)
+num2[4]=SCHACE$`number of CPs`
 ######Proposed I
 index=which(is.na(CGHdata[2:2301,58])==1)
 x=((1:n)/n)[-index]
@@ -246,15 +254,15 @@ initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
 candidate=refine1(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num2[4]=length(estimate4)
+num2[5]=length(estimate4)
 ######Proposed II
 candidate=refine2(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num2[5]=length(estimate5)
+num2[6]=length(estimate5)
 
 ##############################sample X1533-10
-num3=rep(0,5)
+num3=rep(0,6)
 y1=data[,3]
 CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
 num3[1]=length(CBS$output[,4])-1
@@ -266,6 +274,9 @@ num3[2]=length(estimate2)
 DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
 num3[3]=which.max(logLik(DP, penalty="BIC"))-1
 estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######SCHACE
+SCHACE=main.SCHACE(y1)
+num3[4]=SCHACE$`number of CPs`
 ######Proposed I
 index=which(is.na(CGHdata[2:2301,61])==1)
 x=((1:n)/n)[-index]
@@ -277,15 +288,15 @@ initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
 candidate=refine1(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num3[4]=length(estimate4)
+num3[5]=length(estimate4)
 ######Proposed II
 candidate=refine2(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num3[5]=length(estimate5)
+num3[6]=length(estimate5)
 
 ##############################sample X1533-13
-num4=rep(0,5)
+num4=rep(0,6)
 y1=data[,4]
 CBS=DNAcopy::segment(CNA(y1, rep(1,n), 1:n))                
 num4[1]=length(CBS$output[,4])-1
@@ -297,6 +308,9 @@ num4[2]=length(estimate2)
 DP=tilingArray::segment(y1, maxseg=100, maxk=n/3)
 num4[3]=which.max(logLik(DP, penalty="BIC"))-1
 estimate3=DP@breakpoints[[which.max(logLik(DP, penalty="BIC"))]][,"estimate"]
+######SCHACE
+SCHACE=main.SCHACE(y1)
+num4[4]=SCHACE$`number of CPs`
 ######Proposed I
 index=which(is.na(CGHdata[2:2301,64])==1)
 x=((1:n)/n)[-index]
@@ -308,12 +322,12 @@ initial=x[localMax(D,span=(h*n))[which(D[localMax(D,span=(h*n))]>lambda)]]
 candidate=refine1(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate4=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num4[4]=length(estimate4)
+num4[5]=length(estimate4)
 ######Proposed II
 candidate=refine2(x,y,h,initial)
 pvalue=Pvalue(x,y,candidate)
 estimate5=n*candidate[which(p.adjust(pvalue, "BH")<0.05)]
-num4[5]=length(estimate5)
+num4[6]=length(estimate5)
 
 ############show table
 rbind(num1,num2,num3,num4)
